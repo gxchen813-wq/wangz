@@ -1,0 +1,5 @@
+{
+  "name": "Prompt Template Manager",
+  "description": "A tool to manage and use AI prompt templates with variables.",
+  "requestFramePermissions": []
+}
