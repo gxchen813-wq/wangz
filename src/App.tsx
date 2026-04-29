@@ -1,12 +1,14 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Plus, Edit2, Trash2, Save, X, FileText, Search, MessageSquareQuote } from 'lucide-react';
+import { Plus, Edit2, Trash2, Save, X, FileText, Search, MessageSquareQuote, LogIn, LogOut, User as UserIcon } from 'lucide-react';
 import { Template } from './types';
-import { getTemplates, saveTemplates } from './utils/storage';
+import { getTemplates, saveTemplate, deleteTemplate as deleteTemplateApi } from './utils/storage';
 import { fillTemplate } from './utils/templateParser';
 import VariableForm from './components/VariableForm';
 import PromptPreview from './components/PromptPreview';
 import TemplateEditor from './components/TemplateEditor';
 import Modal from './components/Modal';
+import { auth } from './utils/firebase';
+import { signInWithPopup, GoogleAuthProvider, signOut, onAuthStateChanged, User, signInAnonymously } from 'firebase/auth';
 
 export default function App() {
   const [templates, setTemplates] = useState<Template[]>([]);
@@ -15,6 +17,8 @@ export default function App() {
   const [editingTemplate, setEditingTemplate] = useState<Template | null>(null);
   const [variableValues, setVariableValues] = useState<Record<string, string>>({});
   const [searchQuery, setSearchQuery] = useState('');
+  const [user, setUser] = useState<User | null>(null);
+  const [loading, setLoading] = useState(true);
   
   // Modal states
   const [modalConfig, setModalConfig] = useState<{
@@ -55,12 +59,72 @@ export default function App() {
   };
 
   useEffect(() => {
-    const loaded = getTemplates();
-    setTemplates(loaded);
-    if (loaded.length > 0) {
-      setSelectedId(loaded[0].id);
-    }
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      setUser(currentUser);
+      if (currentUser) {
+        const loaded = await getTemplates();
+        setTemplates(loaded);
+        if (loaded.length > 0) {
+          setSelectedId(loaded[0].id);
+        }
+      } else {
+        setTemplates([]);
+        setSelectedId(null);
+      }
+      setLoading(false);
+    });
+
+    return () => unsubscribe();
   }, []);
+
+  const handleSignIn = async () => {
+    const provider = new GoogleAuthProvider();
+    try {
+      await signInWithPopup(auth, provider);
+    } catch (error) {
+      console.error("Error signing in with Google", error);
+      setModalConfig({
+        isOpen: true,
+        title: '登录失败',
+        message: '无法使用 Google 帐号登录。',
+        type: 'alert',
+        onConfirm: () => setModalConfig(prev => ({ ...prev, isOpen: false }))
+      });
+    }
+  };
+
+  const handleGuestSignIn = async () => {
+    try {
+      await signInAnonymously(auth);
+    } catch (error: any) {
+      console.error("Error signing in anonymously", error);
+      if (error.code === 'auth/operation-not-allowed') {
+        setModalConfig({
+          isOpen: true,
+          title: '未开启匿名登录',
+          message: '作为访客体验前，请前往您的 Firebase 控制台 (Authentication -> Sign-in method) 中启用 "Anonymous" 提供商。',
+          type: 'alert',
+          onConfirm: () => setModalConfig(prev => ({ ...prev, isOpen: false }))
+        });
+      } else {
+        setModalConfig({
+          isOpen: true,
+          title: '登录失败',
+          message: '无法作为访客继续。',
+          type: 'alert',
+          onConfirm: () => setModalConfig(prev => ({ ...prev, isOpen: false }))
+        });
+      }
+    }
+  };
+
+  const handleSignOut = async () => {
+    try {
+      await signOut(auth);
+    } catch (error) {
+      console.error("Error signing out", error);
+    }
+  };
 
   const selectedTemplate = useMemo(() => 
     templates.find(t => t.id === selectedId) || null
@@ -85,7 +149,7 @@ export default function App() {
 
   const handleCreateTemplate = () => {
     const newTemplate: Template = {
-      id: Date.now().toString(),
+      id: crypto.randomUUID(),
       name: '新模板',
       content: '',
       createdAt: Date.now(),
@@ -104,7 +168,7 @@ export default function App() {
     }
   };
 
-  const handleSaveTemplate = () => {
+  const handleSaveTemplate = async () => {
     if (!editingTemplate) return;
     
     if (!editingTemplate.name.trim()) {
@@ -112,21 +176,20 @@ export default function App() {
       return;
     }
 
+    const templateToSave = { ...editingTemplate, updatedAt: Date.now() };
+
     let newTemplates;
     const exists = templates.some(t => t.id === editingTemplate.id);
-    
     if (exists) {
-      newTemplates = templates.map(t => 
-        t.id === editingTemplate.id ? { ...editingTemplate, updatedAt: Date.now() } : t
-      );
+      newTemplates = templates.map(t => t.id === editingTemplate.id ? templateToSave : t);
     } else {
-      newTemplates = [{ ...editingTemplate, updatedAt: Date.now() }, ...templates];
+      newTemplates = [templateToSave, ...templates];
     }
-
     setTemplates(newTemplates);
-    saveTemplates(newTemplates);
     setIsEditing(false);
     setEditingTemplate(null);
+    
+    await saveTemplate(templateToSave);
   };
 
   const handleCancelEdit = () => {
@@ -139,14 +202,14 @@ export default function App() {
   };
 
   const handleDeleteTemplate = (id: string) => {
-    showConfirm('删除模板', '确定要删除这个模板吗？此操作不可恢复。', () => {
+    showConfirm('删除模板', '确定要删除这个模板吗？此操作不可恢复。', async () => {
       const newTemplates = templates.filter(t => t.id !== id);
       setTemplates(newTemplates);
-      saveTemplates(newTemplates);
       if (selectedId === id) {
         setSelectedId(newTemplates.length > 0 ? newTemplates[0].id : null);
         setIsEditing(false);
       }
+      await deleteTemplateApi(id);
     });
   };
 
@@ -158,16 +221,57 @@ export default function App() {
     ? fillTemplate(selectedTemplate.content, variableValues)
     : '';
 
+  if (loading) {
+    return <div className="flex items-center justify-center h-screen bg-slate-50"><p className="text-slate-500">Loading...</p></div>;
+  }
+
+  if (!user) {
+    return (
+      <div className="flex flex-col items-center justify-center h-screen bg-slate-50 text-slate-900 font-sans">
+        <div className="bg-white p-6 rounded-full shadow-sm border border-slate-100 mb-6">
+          <MessageSquareQuote size={48} className="text-indigo-600" />
+        </div>
+        <h1 className="text-2xl font-bold text-slate-800 tracking-tight mb-2">Prompt Manager</h1>
+        <p className="text-slate-500 mb-8 max-w-sm text-center">登录以创建和管理您的提示词模板，您的数据将安全地保存在云端。</p>
+        <div className="flex flex-col sm:flex-row gap-4">
+          <button
+            onClick={handleSignIn}
+            className="flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-lg font-medium transition-colors shadow-sm shadow-indigo-200"
+          >
+            <LogIn size={20} />
+            使用 Google 帐号登录
+          </button>
+          <button
+            onClick={handleGuestSignIn}
+            className="flex items-center justify-center gap-2 bg-white text-slate-700 border border-slate-200 hover:bg-slate-50 px-6 py-3 rounded-lg font-medium transition-colors shadow-sm"
+          >
+            <UserIcon size={20} />
+            免登录试用
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col md:flex-row h-screen bg-slate-50 text-slate-900 font-sans overflow-hidden">
       {/* Sidebar */}
       <div className="w-full md:w-80 h-1/3 md:h-full bg-white border-b md:border-b-0 md:border-r border-slate-200 flex flex-col z-10 shadow-sm shrink-0">
         <div className="p-5 border-b border-slate-100">
-          <div className="flex items-center gap-2.5 mb-5">
-            <div className="bg-indigo-600 p-2 rounded-lg">
-              <MessageSquareQuote className="text-white" size={20} />
+          <div className="flex items-center justify-between mb-5">
+            <div className="flex items-center gap-2.5">
+              <div className="bg-indigo-600 p-2 rounded-lg">
+                <MessageSquareQuote className="text-white" size={20} />
+              </div>
+              <h1 className="text-lg font-bold text-slate-800 tracking-tight">Prompt Manager</h1>
             </div>
-            <h1 className="text-lg font-bold text-slate-800 tracking-tight">Prompt Manager</h1>
+            <button 
+              onClick={handleSignOut}
+              className="text-slate-400 hover:text-slate-600"
+              title="退出登录"
+            >
+              <LogOut size={18} />
+            </button>
           </div>
           <button
             onClick={handleCreateTemplate}

@@ -1,0 +1,47 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+    
+    function isSignedIn() { return request.auth != null; }
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+    
+    function isValidId(id) { return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); }
+    
+    function isValidTemplate(data) {
+      return data.keys().hasAll(['userId', 'name', 'content', 'createdAt', 'updatedAt']) &&
+             data.keys().size() == 5 &&
+             data.userId == request.auth.uid &&
+             data.name is string && data.name.size() <= 100 &&
+             data.content is string && data.content.size() <= 10000 &&
+             data.createdAt is number &&
+             data.updatedAt is number;
+    }
+
+    match /templates/{templateId} {
+      // Must be logged in, and user can only list/read their own templates
+      allow read: if isSignedIn() && existing().userId == request.auth.uid;
+      
+      // User can create templates owned by them
+      allow create: if isSignedIn() && 
+                    isValidId(templateId) && 
+                    isValidTemplate(incoming()) && 
+                    (incoming().createdAt == request.time.toMillis() || incoming().createdAt is number) &&
+                    (incoming().updatedAt == request.time.toMillis() || incoming().updatedAt is number);
+
+      // User can update templates owned by them
+      allow update: if isSignedIn() &&
+                    isValidTemplate(incoming()) &&
+                    existing().userId == request.auth.uid &&
+                    incoming().userId == existing().userId &&
+                    incoming().createdAt == existing().createdAt &&
+                    incoming().diff(existing()).affectedKeys().hasOnly(['name', 'content', 'updatedAt']);
+
+      // User can delete their own templates
+      allow delete: if isSignedIn() && isValidId(templateId) && existing().userId == request.auth.uid;
+    }
+  }
+}

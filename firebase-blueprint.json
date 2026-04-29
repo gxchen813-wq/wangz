@@ -1,0 +1,40 @@
+{
+  "entities": {
+    "Template": {
+      "title": "Prompt Template",
+      "description": "A user-defined prompt template with variables.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "The UID of the user who owns this template."
+        },
+        "name": {
+          "type": "string",
+          "description": "Name of the template."
+        },
+        "content": {
+          "type": "string",
+          "description": "Content of the template."
+        },
+        "createdAt": {
+          "type": "number",
+          "description": "Timestamp when the template was created."
+        },
+        "updatedAt": {
+          "type": "number",
+          "description": "Timestamp when the template was last updated."
+        }
+      },
+      "required": ["userId", "name", "content", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/templates/{templateId}": {
+      "schema": {
+        "$ref": "#/entities/Template"
+      },
+      "description": "Prompt templates created by users."
+    }
+  }
+}

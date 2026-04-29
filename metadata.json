@@ -1,5 +1,6 @@
 {
-  "name": "Prompt Template Manager",
+  "name": "提示词",
   "description": "A tool to manage and use AI prompt templates with variables.",
-  "requestFramePermissions": []
+  "requestFramePermissions": [],
+  "majorCapabilities": []
 }

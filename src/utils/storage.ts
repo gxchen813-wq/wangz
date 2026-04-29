@@ -1,6 +1,45 @@
+import { collection, doc, setDoc, getDocs, getDoc, updateDoc, deleteDoc, query, where } from 'firebase/firestore';
+import { db, auth } from './firebase';
 import { Template } from '../types';
 
-const STORAGE_KEY = 'prompt_templates';
+export enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+export interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId?: string | null;
+    email?: string | null;
+    emailVerified?: boolean | null;
+    isAnonymous?: boolean | null;
+    tenantId?: string | null;
+  }
+}
+
+export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+      tenantId: auth.currentUser?.tenantId,
+    },
+    operationType,
+    path
+  };
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
 
 const DEFAULT_TEMPLATES: Template[] = [
   {
@@ -46,38 +85,69 @@ const DEFAULT_TEMPLATES: Template[] = [
   }
 ];
 
-export function getTemplates(): Template[] {
-  const data = localStorage.getItem(STORAGE_KEY);
-  if (!data) {
-    saveTemplates(DEFAULT_TEMPLATES);
-    return DEFAULT_TEMPLATES;
-  }
+export async function getTemplates(): Promise<Template[]> {
+  const user = auth.currentUser;
+  if (!user) return [];
+
   try {
-    let templates: Template[] = JSON.parse(data);
+    const q = query(collection(db, 'templates'), where('userId', '==', user.uid));
+    const querySnapshot = await getDocs(q);
     
-    // Auto-fix for the formatting issue where {{公司地址}} was appended directly
-    let hasChanges = false;
-    templates = templates.map(t => {
-      if (t.content.includes('{{参考链接}}{{公司地址}}')) {
-        t.content = t.content.replace(
-          '{{参考链接}}{{公司地址}}', 
-          '{{参考链接}}\n公司地址：{{公司地址}}'
-        );
-        hasChanges = true;
+    if (querySnapshot.empty) {
+      // Create defaults for this user
+      for (const t of DEFAULT_TEMPLATES) {
+        await saveTemplate({ ...t, id: crypto.randomUUID() });
       }
-      return t;
-    });
-
-    if (hasChanges) {
-      saveTemplates(templates);
+      return getTemplates(); // Re-fetch
     }
-
-    return templates;
+    
+    const templates: Template[] = [];
+    querySnapshot.forEach((doc) => {
+      const data = doc.data();
+      templates.push({
+        id: doc.id,
+        name: data.name,
+        content: data.content,
+        createdAt: data.createdAt,
+        updatedAt: data.updatedAt,
+      });
+    });
+    
+    // Sort by updatedAt descending
+    return templates.sort((a, b) => b.updatedAt - a.updatedAt);
   } catch (e) {
-    return DEFAULT_TEMPLATES;
+    handleFirestoreError(e, OperationType.LIST, 'templates');
+    return [];
   }
 }
 
-export function saveTemplates(templates: Template[]) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(templates));
+export async function saveTemplate(template: Template) {
+  const user = auth.currentUser;
+  if (!user) throw new Error('User not authenticated');
+
+  try {
+    const templateDoc = doc(db, 'templates', template.id);
+    const data = {
+      userId: user.uid,
+      name: template.name,
+      content: template.content,
+      createdAt: template.createdAt,
+      updatedAt: template.updatedAt,
+    };
+    
+    await setDoc(templateDoc, data, { merge: true });
+  } catch (e) {
+    handleFirestoreError(e, OperationType.WRITE, `templates/${template.id}`);
+  }
+}
+
+export async function deleteTemplate(id: string) {
+  const user = auth.currentUser;
+  if (!user) throw new Error('User not authenticated');
+
+  try {
+    await deleteDoc(doc(db, 'templates', id));
+  } catch (e) {
+    handleFirestoreError(e, OperationType.DELETE, `templates/${id}`);
+  }
 }
