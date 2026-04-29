@@ -98,11 +98,14 @@ export default function App() {
       await signInAnonymously(auth);
     } catch (error: any) {
       console.error("Error signing in anonymously", error);
-      if (error.code === 'auth/operation-not-allowed') {
+      if (error.code === 'auth/operation-not-allowed' || error.code === 'auth/admin-restricted-operation') {
+        const isRestricted = error.code === 'auth/admin-restricted-operation';
         setModalConfig({
           isOpen: true,
-          title: '未开启匿名登录',
-          message: '作为访客体验前，请前往您的 Firebase 控制台 (Authentication -> Sign-in method) 中启用 "Anonymous" 提供商。',
+          title: isRestricted ? '登录受限' : '未开启匿名登录',
+          message: isRestricted
+            ? '匿名登录当前受限。这通常是因为 Firebase 项目中未启用匿名登录，或者某些安全设置限制了此操作。请前往 Firebase 控制台 (Authentication -> Sign-in method) 启用 "Anonymous" 登录方式。'
+            : '作为访客体验前，请前往您的 Firebase 控制台 (Authentication -> Sign-in method) 中启用 "Anonymous" 提供商。',
           type: 'alert',
           onConfirm: () => setModalConfig(prev => ({ ...prev, isOpen: false }))
         });
